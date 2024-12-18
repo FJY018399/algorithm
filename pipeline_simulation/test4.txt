@@ -1,0 +1,5 @@
+4
+LOAD R1, X
+ADD R2, R1, 5
+STORE R2, X
+ADD R3, R2, 1

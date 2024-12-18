@@ -1,0 +1,3 @@
+test5.txt: 17
+test6.txt: 16
+test7.txt: 19

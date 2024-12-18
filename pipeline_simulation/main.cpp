@@ -5,18 +5,20 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <algorithm>
+#include <set>
 
 struct Instruction {
     enum Type { LOAD, STORE, ADD, SUB };
     Type type;
     std::string destReg;
-    std::string op1;
-    std::string op2;
-    int ifCycle = -1;
-    int idCycle = -1;
-    int exCycle = -1;
-    int memCycle = -1;
-    int wbCycle = -1;
+    std::string src1Reg;  // For ADD/SUB first source register
+    std::string src2Reg;  // For ADD/SUB second source register
+    std::string memLoc;   // For LOAD/STORE memory location
+    int ifCycle = 1;      // Start with IF at cycle 1
+    int idCycle = 2;      // ID follows IF
+    int exCycle = 3;      // EX follows ID
+    int memCycle = 4;     // MEM follows EX
+    int wbCycle = 5;      // WB follows MEM
 };
 
 class PipelineSimulator {
@@ -29,38 +31,20 @@ private:
 
     // Check if inst2 depends on inst1
     bool hasDependency(const Instruction& inst1, const Instruction& inst2) {
-        // LOAD instruction dependencies
-        if (inst1.type == Instruction::LOAD) {
-            // If inst1 is LOAD, inst2 can't use the loaded register until LOAD completes
-            if (inst2.type == Instruction::ADD || inst2.type == Instruction::SUB) {
-                // Check if inst2 uses the register being loaded
-                return inst2.destReg == inst1.destReg ||
-                       (isRegister(inst2.op1) && inst2.op1 == inst1.destReg) ||
-                       (isRegister(inst2.op2) && inst2.op2 == inst1.destReg);
-            } else if (inst2.type == Instruction::STORE) {
-                return inst2.destReg == inst1.destReg;
-            }
+        // Check write-after-write (WAW)
+        if (!inst2.destReg.empty() && inst2.destReg == inst1.destReg) {
+            return true;
         }
-        // STORE instruction dependencies
-        else if (inst1.type == Instruction::STORE) {
-            // For STORE, block if inst2 tries to modify the source register
-            if (inst2.type == Instruction::ADD || inst2.type == Instruction::SUB) {
-                return inst2.destReg == inst1.destReg;
-            } else if (inst2.type == Instruction::STORE || inst2.type == Instruction::LOAD) {
-                // Ensure sequential memory operations
+
+        // Check read-after-write (RAW)
+        if (inst2.type == Instruction::ADD || inst2.type == Instruction::SUB) {
+            if (inst1.destReg == inst2.src1Reg || inst1.destReg == inst2.src2Reg) {
                 return true;
             }
+        } else if (inst2.type == Instruction::STORE && inst1.destReg == inst2.src1Reg) {
+            return true;
         }
-        // ADD/SUB instruction dependencies
-        else if (inst1.type == Instruction::ADD || inst1.type == Instruction::SUB) {
-            if (inst2.type == Instruction::ADD || inst2.type == Instruction::SUB) {
-                return inst2.destReg == inst1.destReg ||
-                       (isRegister(inst2.op1) && inst2.op1 == inst1.destReg) ||
-                       (isRegister(inst2.op2) && inst2.op2 == inst1.destReg);
-            } else if (inst2.type == Instruction::STORE) {
-                return inst2.destReg == inst1.destReg;
-            }
-        }
+
         return false;
     }
 
@@ -73,54 +57,28 @@ public:
 
         if (type == "LOAD") {
             inst.type = Instruction::LOAD;
-            ss >> inst.destReg;
-            inst.destReg.pop_back();
-            ss >> inst.op1;
+            std::string reg, mem;
+            ss >> reg >> mem;
+            inst.destReg = reg.substr(0, reg.length() - 1);  // Remove comma
+            inst.memLoc = mem;
         } else if (type == "STORE") {
             inst.type = Instruction::STORE;
-            ss >> inst.destReg;
-            inst.destReg.pop_back();
-            ss >> inst.op1;
-        } else if (type == "ADD") {
-            inst.type = Instruction::ADD;
-            ss >> inst.destReg;
-            inst.destReg.pop_back();
-            ss >> inst.op1;
-            inst.op1.pop_back();
-            ss >> inst.op2;
-        } else if (type == "SUB") {
-            inst.type = Instruction::SUB;
-            ss >> inst.destReg;
-            inst.destReg.pop_back();
-            ss >> inst.op1;
-            inst.op1.pop_back();
-            ss >> inst.op2;
+            std::string reg, mem;
+            ss >> reg >> mem;
+            inst.src1Reg = reg.substr(0, reg.length() - 1);  // Remove comma, store reads from register
+            inst.memLoc = mem;
+        } else if (type == "ADD" || type == "SUB") {
+            inst.type = (type == "ADD") ? Instruction::ADD : Instruction::SUB;
+            std::string dest, src1, src2;
+            ss >> dest >> src1 >> src2;
+
+            // Clean up register names
+            inst.destReg = dest.substr(0, dest.length() - 1);  // Remove comma
+            inst.src1Reg = (src1[0] == 'R') ? src1.substr(0, src1.length() - 1) : "";  // Remove comma if register
+            inst.src2Reg = (src2[0] == 'R') ? src2 : "";  // Last operand has no comma
         }
         instructions.push_back(inst);
     }
-
-    void printStages(const Instruction& inst, int i) {
-        std::string type;
-        switch(inst.type) {
-            case Instruction::LOAD: type = "LOAD"; break;
-            case Instruction::STORE: type = "STORE"; break;
-            case Instruction::ADD: type = "ADD"; break;
-            case Instruction::SUB: type = "SUB"; break;
-        }
-        std::cout << "Instruction " << i << " (" << type << " " << inst.destReg;
-        if (inst.type == Instruction::ADD || inst.type == Instruction::SUB) {
-            std::cout << ", " << inst.op1 << ", " << inst.op2;
-        } else {
-            std::cout << ", " << inst.op1;
-        }
-        std::cout << "):" << std::endl;
-        std::cout << "  IF: " << inst.ifCycle << std::endl;
-        std::cout << "  ID: " << inst.idCycle << std::endl;
-        std::cout << "  EX: " << inst.exCycle << std::endl;
-        std::cout << "  MEM: " << inst.memCycle << std::endl;
-        std::cout << "  WB: " << inst.wbCycle << std::endl;
-    }
-
     int simulate() {
         if (instructions.empty()) return 0;
 
@@ -134,95 +92,71 @@ public:
         // Process each instruction
         for (size_t i = 1; i < instructions.size(); i++) {
             Instruction& inst = instructions[i];
-            const Instruction& prev = instructions[i-1];
 
-            // Start IF one cycle after previous instruction's IF (in-order issue)
-            inst.ifCycle = prev.ifCycle + 1;  // Base delay between instructions
+            // Each instruction starts immediately after the previous one's IF stage
+            inst.ifCycle = i + 1;  // Instructions start in consecutive cycles
+            inst.idCycle = inst.ifCycle + 1;
+            inst.exCycle = inst.idCycle + 1;
+            inst.memCycle = inst.exCycle + 1;
+            inst.wbCycle = inst.memCycle + 1;
 
-            // Initially set remaining stages based on IF cycle
-            inst.idCycle = inst.ifCycle + 1;  // ID must follow IF
-            inst.exCycle = inst.idCycle + 1;  // EX must follow ID
-            inst.memCycle = inst.exCycle + 1;  // MEM must follow EX
-            inst.wbCycle = inst.memCycle + 1;  // WB must follow MEM
-
-            // Find dependencies and their types
-            bool hasRegDep = false;
-            bool hasLoadStoreDep = false;
-            int maxDepCycle = inst.idCycle;
-
-            // Check dependencies with ALL previous instructions
+            // Check dependencies with all previous instructions
             for (size_t j = 0; j < i; j++) {
-                const Instruction& dep = instructions[j];
-                if (hasDependency(dep, inst)) {
-                    hasRegDep = true;
-                    // Must wait for previous instruction to complete WB stage
-                    maxDepCycle = std::max(maxDepCycle, dep.wbCycle);
-                    if (dep.type == Instruction::LOAD || dep.type == Instruction::STORE) {
-                        hasLoadStoreDep = true;
+                const Instruction& prev = instructions[j];
+
+                if (hasDependency(prev, inst)) {
+                    // For data dependencies, only need to wait for the stage where data becomes available
+                    int requiredCycle;
+
+                    if (prev.type == Instruction::LOAD) {
+                        // For LOAD, data is available after MEM stage
+                        requiredCycle = prev.memCycle;
+                    } else {
+                        // For arithmetic, data is available after EX stage
+                        requiredCycle = prev.exCycle;
+                    }
+
+                    // Only stall ID stage if it would start before data is ready
+                    if (inst.idCycle <= requiredCycle) {
+                        // Adjust ID stage to start right after data is ready
+                        inst.idCycle = requiredCycle + 1;
+                        inst.exCycle = inst.idCycle + 1;
+                        inst.memCycle = inst.exCycle + 1;
+                        inst.wbCycle = inst.memCycle + 1;
+                    }
+                }
+
+                // Memory operations must complete in order
+                if ((inst.type == Instruction::LOAD || inst.type == Instruction::STORE) &&
+                    (prev.type == Instruction::LOAD || prev.type == Instruction::STORE) &&
+                    j == i - 1) {  // Only for consecutive memory operations
+                    if (inst.memCycle <= prev.memCycle) {
+                        // Memory operations must be sequential
+                        inst.memCycle = prev.memCycle + 1;
+                        inst.wbCycle = inst.memCycle + 1;
                     }
                 }
             }
+        }
 
-            // Always ensure minimum pipeline spacing, even for independent instructions
-            inst.idCycle = std::max(inst.idCycle, prev.idCycle + 1);
-            inst.exCycle = std::max(inst.exCycle, prev.exCycle + 1);
-            inst.memCycle = std::max(inst.memCycle, prev.memCycle + 1);
-            inst.wbCycle = std::max(inst.wbCycle, prev.wbCycle + 1);
-
-            // Handle register dependencies (ADD/SUB)
-            if (hasRegDep && !hasLoadStoreDep) {
-                // For pure register dependencies, wait for WB but minimize delay
-                inst.idCycle = std::max(maxDepCycle, inst.idCycle);
-                inst.exCycle = inst.idCycle + 1;
-                inst.memCycle = inst.exCycle + 1;
-                inst.wbCycle = inst.memCycle + 1;
-            }
-
-            // Special handling for LOAD/STORE instructions and their dependencies
-            if (inst.type == Instruction::LOAD || inst.type == Instruction::STORE || hasLoadStoreDep) {
-                if (hasLoadStoreDep) {
-                    // Must wait longer for LOAD/STORE dependencies
-                    inst.idCycle = std::max(maxDepCycle + 1, inst.idCycle);
-                    inst.exCycle = inst.idCycle + 1;
-                    inst.memCycle = inst.exCycle + 1;
-                    inst.wbCycle = inst.memCycle + 1;
-                }
-
-                if (inst.type == Instruction::LOAD || inst.type == Instruction::STORE) {
-                    // Ensure memory operations are properly spaced
-                    inst.memCycle = std::max(inst.memCycle, prev.memCycle + 2);
-                    inst.wbCycle = inst.memCycle + 1;
-                }
-            }
-
-            // Ensure each stage follows its previous stage by exactly one cycle
-            inst.exCycle = std::max(inst.exCycle, inst.idCycle + 1);
-            inst.memCycle = std::max(inst.memCycle, inst.exCycle + 1);
-            inst.wbCycle = std::max(inst.wbCycle, inst.memCycle + 1);
-
-            // Debug output
-            std::cout << "\nProcessing instruction " << i << ":" << std::endl;
-            printStages(inst, i);
-            if (hasRegDep) std::cout << "  Has register dependency" << std::endl;
-            if (hasLoadStoreDep) std::cout << "  Has LOAD/STORE dependency" << std::endl;
-        } // Close for loop
-
-
+        // Return the cycle when the last instruction completes
         return instructions.back().wbCycle;
-    } // Close simulate function
-}; // Close class
+    }
 
 int main() {
-    int N;
-    std::cin >> N;
-    std::cin.ignore();  // Clear newline
+    int n;
+    std::cin >> n;
+
+    std::vector<std::string> instructions(n);
+    for(int i = 0; i < n; i++) {
+        std::string line;
+        std::getline(std::cin >> std::ws, line);
+        instructions[i] = line;
+    }
 
     PipelineSimulator simulator;
-    std::string line;
-
-    for (int i = 0; i < N; i++) {
-        std::getline(std::cin, line);
-        simulator.addInstruction(line);
+    for(const auto& inst : instructions) {
+        simulator.addInstruction(inst);
     }
 
     std::cout << simulator.simulate() << std::endl;

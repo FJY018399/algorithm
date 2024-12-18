@@ -1,0 +1,4 @@
+3
+LOAD R1, X
+ADD R2, R1, R3
+SUB R4, R2, R5
